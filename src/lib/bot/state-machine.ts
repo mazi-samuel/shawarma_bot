@@ -1,19 +1,8 @@
 import { eq, and, ne, desc } from "drizzle-orm";
 import { db } from "@/lib/db";
-import {
-  customers,
-  conversationState,
-  orders,
-  orderItems,
-  type ConversationStep,
-} from "@/lib/db/schema";
+import { customers, orders, orderItems } from "@/lib/db/schema";
 import type { Vendor } from "@/lib/vendor/vendor";
-import {
-  sendText,
-  sendInteractiveList,
-  sendInteractiveButtons,
-  type WhatsAppCredentials,
-} from "@/lib/whatsapp/client";
+import { sendText, sendInteractiveList, sendInteractiveButtons } from "@/lib/whatsapp/client";
 import {
   CATEGORY_LABELS,
   getAvailableCategories,
@@ -35,25 +24,14 @@ import {
   formatEta,
 } from "@/lib/bot/messages";
 import type { IncomingMessage } from "@/lib/whatsapp/webhook-handler";
+import { creds, getState, setState, truncate, RESET_KEYWORDS } from "@/lib/bot/conversation";
+import { handleAdminMessage } from "@/lib/bot/admin-flow";
 
 interface ConversationContext {
   cart?: CartLine[];
   selectedCategory?: string;
   pendingMenuItemId?: number;
   pendingOrderId?: number;
-}
-
-const RESET_KEYWORDS = new Set(["menu", "hi", "hello", "hey", "start", "hey there"]);
-
-function truncate(str: string, max: number): string {
-  return str.length > max ? `${str.slice(0, max - 1)}…` : str;
-}
-
-function creds(vendor: Vendor): WhatsAppCredentials {
-  if (!vendor.whatsappPhoneNumberId || !vendor.whatsappToken) {
-    throw new Error(`Vendor ${vendor.slug} has no WhatsApp credentials configured`);
-  }
-  return { phoneNumberId: vendor.whatsappPhoneNumberId, token: vendor.whatsappToken };
 }
 
 async function getOrCreateCustomer(vendorId: number, phoneNumber: string, name?: string) {
@@ -66,33 +44,6 @@ async function getOrCreateCustomer(vendorId: number, phoneNumber: string, name?:
 
   const inserted = await db.insert(customers).values({ vendorId, phoneNumber, name }).returning();
   return inserted[0]!;
-}
-
-async function getState(vendorId: number, phoneNumber: string) {
-  const rows = await db
-    .select()
-    .from(conversationState)
-    .where(and(eq(conversationState.vendorId, vendorId), eq(conversationState.phoneNumber, phoneNumber)))
-    .limit(1);
-  if (rows[0]) return rows[0];
-
-  const inserted = await db
-    .insert(conversationState)
-    .values({ vendorId, phoneNumber, step: "idle", context: {} })
-    .returning();
-  return inserted[0]!;
-}
-
-async function setState(
-  vendorId: number,
-  phoneNumber: string,
-  step: ConversationStep,
-  context: ConversationContext
-): Promise<void> {
-  await db
-    .update(conversationState)
-    .set({ step, context, updatedAt: new Date() })
-    .where(and(eq(conversationState.vendorId, vendorId), eq(conversationState.phoneNumber, phoneNumber)));
 }
 
 async function sendMainMenu(vendor: Vendor, to: string): Promise<void> {
@@ -180,6 +131,17 @@ async function sendCartReview(vendor: Vendor, to: string, cart: CartLine[]): Pro
 
 export async function handleIncomingMessage(vendor: Vendor, msg: IncomingMessage): Promise<void> {
   const phone = msg.from;
+
+  // A vendor's admin identity IS their registered phone number — no
+  // password, no separate login. Anyone messaging the vendor's live
+  // WhatsApp number from that exact number is managing the business, not
+  // placing an order, so this branch never falls through to the customer
+  // flow below (see src/lib/db/schema.ts on `vendors.adminPhone`).
+  if (phone === vendor.adminPhone) {
+    await handleAdminMessage(vendor, msg);
+    return;
+  }
+
   const text = msg.text.trim();
   const lower = text.toLowerCase();
 

@@ -1,5 +1,4 @@
 import { eq } from "drizzle-orm";
-import bcrypt from "bcryptjs";
 import { db } from "@/lib/db";
 import { vendors } from "@/lib/db/schema";
 
@@ -10,8 +9,8 @@ export async function getVendorBySlug(slug: string): Promise<Vendor | undefined>
   return rows[0];
 }
 
-export async function getVendorById(id: number): Promise<Vendor | undefined> {
-  const rows = await db.select().from(vendors).where(eq(vendors.id, id)).limit(1);
+export async function getVendorByAdminPhone(adminPhone: string): Promise<Vendor | undefined> {
+  const rows = await db.select().from(vendors).where(eq(vendors.adminPhone, adminPhone)).limit(1);
   return rows[0];
 }
 
@@ -26,6 +25,10 @@ export async function getVendorByWhatsappPhoneNumberId(
   return rows[0];
 }
 
+export async function listVendors(): Promise<Vendor[]> {
+  return db.select().from(vendors);
+}
+
 export function slugify(input: string): string {
   return input
     .toLowerCase()
@@ -38,30 +41,19 @@ export function slugify(input: string): string {
 export interface CreateVendorInput {
   businessName: string;
   slug: string;
-  adminPassword: string;
+  adminPhone: string;
   currency?: string;
-  timezone?: string;
-  vendorNotifyPhone?: string;
-  whatsappPhoneNumberId?: string;
-  whatsappToken?: string;
-  paystackSecretKey?: string;
 }
 
+/** Creates a vendor with no WhatsApp number yet — see linkVendorWhatsapp. */
 export async function createVendor(input: CreateVendorInput): Promise<Vendor> {
-  const adminPasswordHash = await bcrypt.hash(input.adminPassword, 10);
-
   const [vendor] = await db
     .insert(vendors)
     .values({
       businessName: input.businessName,
       slug: input.slug,
-      adminPasswordHash,
+      adminPhone: input.adminPhone,
       currency: input.currency ?? "NGN",
-      timezone: input.timezone ?? "Africa/Lagos",
-      vendorNotifyPhone: input.vendorNotifyPhone,
-      whatsappPhoneNumberId: input.whatsappPhoneNumberId || null,
-      whatsappToken: input.whatsappToken || null,
-      paystackSecretKey: input.paystackSecretKey || null,
     })
     .returning();
 
@@ -69,6 +61,37 @@ export async function createVendor(input: CreateVendorInput): Promise<Vendor> {
   return vendor;
 }
 
-export async function verifyVendorPassword(vendor: Vendor, password: string): Promise<boolean> {
-  return bcrypt.compare(password, vendor.adminPasswordHash);
+/**
+ * Called from the operator's "link" command once they've manually added the
+ * vendor's phone number to the platform's Meta App and have a
+ * phone_number_id + access token for it. This is the one step in the whole
+ * system that requires a human to have visited Meta's own console first —
+ * unavoidable, since Meta has no WhatsApp-message API for provisioning a
+ * new number.
+ */
+export async function linkVendorWhatsapp(
+  slug: string,
+  phoneNumberId: string,
+  token: string
+): Promise<Vendor | undefined> {
+  const [updated] = await db
+    .update(vendors)
+    .set({ whatsappPhoneNumberId: phoneNumberId, whatsappToken: token, updatedAt: new Date() })
+    .where(eq(vendors.slug, slug))
+    .returning();
+  return updated;
+}
+
+export async function updateVendorSettings(
+  vendorId: number,
+  patch: Partial<
+    Pick<Vendor, "paystackSecretKey" | "greetingMessage" | "currency" | "businessName" | "isActive">
+  >
+): Promise<Vendor | undefined> {
+  const [updated] = await db
+    .update(vendors)
+    .set({ ...patch, updatedAt: new Date() })
+    .where(eq(vendors.id, vendorId))
+    .returning();
+  return updated;
 }

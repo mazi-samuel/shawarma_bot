@@ -2,9 +2,10 @@ import "./env";
 import { eq } from "drizzle-orm";
 import { db } from "../src/lib/db";
 import { menuItems, faqs } from "../src/lib/db/schema";
-import { createVendor, getVendorBySlug } from "../src/lib/vendor/vendor";
+import { createVendor, getVendorBySlug, linkVendorWhatsapp, updateVendorSettings } from "../src/lib/vendor/vendor";
 
 const DEMO_SLUG = "demo-shawarma";
+const DEMO_ADMIN_PHONE = process.env.VENDOR_PHONE_NUMBER ?? "2348000000001";
 
 async function main() {
   let vendor = await getVendorBySlug(DEMO_SLUG);
@@ -18,17 +19,17 @@ async function main() {
     vendor = await createVendor({
       businessName: "Mama's Shawarma & Pastries (Demo)",
       slug: DEMO_SLUG,
-      adminPassword: process.env.DEMO_ADMIN_PASSWORD ?? "demo1234",
+      adminPhone: DEMO_ADMIN_PHONE,
       currency: "NGN",
-      vendorNotifyPhone: process.env.VENDOR_PHONE_NUMBER,
-      // Demo credentials are intentionally fake — this vendor can be driven
-      // end-to-end via simulated webhook payloads (see README) without a
-      // real Meta/Paystack account. Swap in real values from /admin/<slug>/settings.
-      whatsappPhoneNumberId: "000000000000demo",
-      whatsappToken: "demo-token-not-real",
     });
+    // Demo credentials are intentionally fake — this vendor can be driven
+    // end-to-end via simulated webhook payloads (see README) without a real
+    // Meta/Paystack account. Swap in real values via the vendor's own admin
+    // WhatsApp flow ("menu" -> Settings) once you have real ones.
+    vendor = (await linkVendorWhatsapp(DEMO_SLUG, "000000000000demo", "demo-token-not-real")) ?? vendor;
+    vendor = (await updateVendorSettings(vendor.id, { paystackSecretKey: "sk_test_demo_not_real" })) ?? vendor;
     console.log(`Created demo vendor with id ${vendor.id}, slug "${vendor.slug}".`);
-    console.log(`Admin login: /admin/${vendor.slug}/login (password: ${process.env.DEMO_ADMIN_PASSWORD ?? "demo1234"})`);
+    console.log(`Admin identity: message the demo vendor's number (phone_number_id 000000000000demo) FROM ${DEMO_ADMIN_PHONE} to reach the admin flow.`);
   }
 
   if (vendorAlreadyExisted) {

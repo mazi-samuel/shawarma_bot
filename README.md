@@ -1,194 +1,175 @@
 # Shawarma Bot
 
-A multi-tenant WhatsApp ordering bot platform for shawarma & pastry vendors. Any number of
-independent vendors can sign up, get their own WhatsApp ordering flow, take payments, and manage
-orders from their own admin dashboard — all on one deployment.
+A multi-tenant WhatsApp ordering bot platform for shawarma & pastry vendors. **Everything happens
+inside WhatsApp** — there is no website, no dashboard, no login form, for either customers or
+vendors. Registering a business, managing its menu/FAQs, and updating order status are all done by
+chatting with the bot, the same way ordering is.
 
-- **WhatsApp**: Meta WhatsApp Cloud API (official), one shared platform Meta App, vendors added as
-  phone numbers under it
-- **Payments**: Paystack — each vendor uses their **own** Paystack account, so their money settles
-  to their own bank account
-- **Stack**: Next.js (App Router, TypeScript) + Drizzle ORM + Postgres, deployed on Vercel
+- **WhatsApp**: Meta WhatsApp Cloud API (official), one shared platform Meta App
+- **Payments**: Paystack — each vendor uses their **own** Paystack account
+- **Stack**: Next.js (App Router, TypeScript) + Drizzle ORM + Postgres, deployed on Vercel — but
+  the web server here only ever answers two webhook URLs and a placeholder "/". There's nothing to
+  click.
 
-## How it works
+## The three phone numbers involved
 
-1. A vendor signs up at `/onboard` (business name, admin password, currency) → gets a unique slug,
-   a starter menu + FAQ set, and their own admin dashboard at `/admin/<slug>`.
-2. From `/admin/<slug>/settings`, the vendor plugs in their own WhatsApp Phone Number ID + access
-   token (added under the platform's shared Meta App) and their own Paystack secret key. Until
-   those are set, the bot works in demo mode (see below) but can't send real WhatsApp messages or
-   take real payments.
-3. Customer messages that vendor's WhatsApp number → sees a main menu (Order / Track / FAQ / Talk
-   to someone). **Routing to the right vendor happens automatically** per-message via the
-   `phone_number_id` Meta includes in every webhook payload — one shared webhook URL serves every
-   vendor.
-4. Ordering: category list → item list (price + prep time shown) → quantity → cart review with
-   total and estimated prep time → checkout.
-5. Checkout creates an order and sends back a Paystack payment link, generated with that vendor's
-   own secret key.
-6. Each vendor configures their **own unique webhook URL** in their **own** Paystack dashboard
-   (shown on their Settings page) — `/api/webhook/paystack/<slug>` — since Paystack payloads don't
-   carry an account identifier, the URL path is what routes it, and the signature is verified
-   against that vendor's own key.
-7. When Paystack confirms payment, the customer gets a confirmation + ETA, and that vendor's own
-   notification number gets pinged with the order details.
-8. The vendor marks the order **Preparing** → **Ready** → **Completed** from their dashboard; each
-   transition messages the customer automatically. "Ready" is vendor-triggered, not a timer, since
-   only the vendor knows when the food is actually done.
-9. FAQ answers come from a small keyword-matched table per vendor, editable from
-   `/admin/<slug>/faqs`.
+1. **The platform's own WhatsApp number** — handles new-vendor registration and the operator's
+   linking commands. This is the one number the platform operator sets up themselves.
+2. **Each vendor's own WhatsApp number** — once linked, this is what the vendor gives to their
+   customers. Customers message it to order; the vendor's own registered phone messages the *same*
+   number to manage it.
+3. **The operator's personal phone** — not a WhatsApp Business number, just whoever runs the
+   platform's own regular number, recognized by an env var.
 
-## Multi-tenancy model (why it's built this way)
+There are no passwords anywhere in this system. A vendor's admin identity **is** their registered
+phone number (`vendors.adminPhone`): any message sent to their live WhatsApp number from that exact
+phone is treated as an admin command instead of a customer order (see
+`src/lib/bot/state-machine.ts`, the `phone === vendor.adminPhone` check at the top of
+`handleIncomingMessage`). That phone can never place a customer order on its own vendor — a known,
+intentional tradeoff (test ordering needs a second phone/number).
 
-- **One shared Meta App for the whole platform.** WhatsApp app-level secrets
-  (`WHATSAPP_APP_SECRET`, `WHATSAPP_VERIFY_TOKEN`) are platform env vars, not per-vendor — every
-  vendor's number gets added as a phone number under this one app (the same model WhatsApp BSPs
-  like Twilio/360dialog/Wati use). What's per-vendor is each vendor's own `phone_number_id` +
-  access token, stored in the `vendors` table and used to route and send.
-- **Each vendor brings their own Paystack account.** So their money goes to their own bank, not
-  a shared pool. That's why the Paystack webhook URL is per-vendor
-  (`/api/webhook/paystack/<slug>`) rather than shared.
-- **Every table is vendor-scoped**: `menu_items`, `customers`, `orders`, `conversation_state`,
-  `faqs` all carry a `vendor_id`. All admin API routes verify the logged-in session's vendor
-  matches the vendor named in the URL before touching any data — one vendor can never read or
-  modify another's orders, menu, or settings (verified in testing — see below).
-- **Admin auth is a signed session cookie**, not shared Basic Auth — login at
-  `/admin/<slug>/login` with that vendor's own password (bcrypt-hashed, set at signup, changeable
-  from Settings).
+## How it works end to end
 
-## Demo mode
+1. A prospective vendor messages the **platform's** WhatsApp number. The bot asks for their
+   business name and currency, entirely by chatting, and creates a vendor record — no WhatsApp
+   number yet.
+2. **The one unavoidable manual step**: WhatsApp/Meta has no message-based API for provisioning a
+   new phone number — every WhatsApp bot platform (Twilio, 360dialog, Wati, this one) requires a
+   human to add the number in Meta's own developer console. The platform operator gets notified
+   automatically (also over WhatsApp) with the exact command to run once they've done that:
+   ```
+   link <slug> <phone_number_id> <token>
+   ```
+   Sent from the operator's own phone to the platform number. That's it — one command, and the
+   vendor's number goes live. The vendor is notified automatically, from their own new number.
+3. From then on, the vendor manages everything by messaging their own number (the one their
+   customers now use) — type `menu` to get the admin menu: **Orders** (view + advance status),
+   **Menu** (add/hide/delete items via a short guided chat), **FAQs** (add/delete), **Settings**
+   (Paystack key, greeting message, currency).
+4. Customers message that same number and see the ordinary ordering flow: category → item →
+   quantity → cart review → checkout → Paystack payment link → paid → status updates as the vendor
+   advances the order through their own chat.
+5. Each vendor's Paystack webhook (`/api/webhook/paystack/<slug>` — shown to them from their
+   Settings menu) confirms payment; the customer and the vendor's admin phone both get pinged.
 
-The seeded demo vendor (`demo-shawarma`) has **fake WhatsApp credentials** — the conversation
-logic, ordering, cart math, admin dashboard, and multi-tenant routing all work fully, but it
-cannot send/receive real WhatsApp messages or take a real payment until you swap in real
-credentials from its Settings page. This is intentional: it lets you verify the entire platform
-works before you've set up any real Meta/Paystack accounts.
+## Multi-tenancy & security model
 
-- Admin login: `http://localhost:3000/admin/demo-shawarma/login`, password from `DEMO_ADMIN_PASSWORD`
-  in `.env.local` (defaults to `demo1234`).
-- Drive its conversation flow with the included simulator (see "Testing without real accounts"
-  below) instead of a real phone.
+- **One shared Meta App for the whole platform.** `WHATSAPP_APP_SECRET`/`WHATSAPP_VERIFY_TOKEN`
+  are platform env vars; every vendor's (and the platform's own) number lives under this one app.
+  Routing an inbound message to the right handler happens per-message via the `phone_number_id`
+  Meta includes in every webhook payload.
+- **Each vendor brings their own Paystack account**, so their money settles to their own bank —
+  that's why the Paystack webhook is per-vendor (`/api/webhook/paystack/<slug>`) rather than
+  shared.
+- **Every table is vendor-scoped** (`menu_items`, `customers`, `orders`, `conversation_state`,
+  `faqs`), and admin actions are only ever executed against the vendor tied to the `phone_number_id`
+  the message arrived on — verified in testing that one vendor's admin phone gets the ordinary
+  *customer* flow when messaging a different vendor's number, never admin access (see below).
 
 ## One-time setup for going to production
 
 ### 1. Database
-
-Already running locally against a Docker Postgres container (see below). For production, use
 Vercel Postgres or Neon — copy the connection string into `DATABASE_URL`.
 
-### 2. Platform Meta App (one-time, not per-vendor)
-
+### 2. Platform Meta App + platform number (one-time)
 1. Create a Meta App at [developers.facebook.com](https://developers.facebook.com/) → **My Apps →
-   Create App → Business** type.
-2. Add the **WhatsApp** product to the app.
-3. Under **App Settings → Basic**, copy the **App Secret** into `WHATSAPP_APP_SECRET`.
-4. Pick any random string for `WHATSAPP_VERIFY_TOKEN`.
-5. Deploy this app first so you have a public URL.
-6. Under **WhatsApp → Configuration → Webhook**, set:
-   - Callback URL: `https://<your-deployment>/api/webhook/whatsapp`
-   - Verify token: your `WHATSAPP_VERIFY_TOKEN`
-   - Subscribe to the **messages** field.
-7. Complete Meta Business verification to lift the 5-test-recipient cap and unlock unlimited
-   messaging.
+   Create App → Business** type, add the **WhatsApp** product.
+2. Under **App Settings → Basic**, copy the **App Secret** into `WHATSAPP_APP_SECRET`. Pick any
+   random string for `WHATSAPP_VERIFY_TOKEN`.
+3. Deploy this app so you have a public URL, then under **WhatsApp → Configuration → Webhook**,
+   set the callback URL to `https://<your-deployment>/api/webhook/whatsapp`, verify token to your
+   `WHATSAPP_VERIFY_TOKEN`, and subscribe to the **messages** field.
+4. Under **WhatsApp → API Setup**, add a phone number for the platform itself (this is the number
+   prospective vendors will message to register) — set `PLATFORM_PHONE_NUMBER_ID` and
+   `PLATFORM_WHATSAPP_TOKEN` (use a permanent System User token for production).
+5. Set `OPERATOR_PHONE_NUMBER` to your own WhatsApp number (digits only, no `+`).
+6. Complete Meta Business verification to lift the 5-test-recipient cap.
 
 ### 3. Per-vendor setup (repeat for each new vendor — no code changes needed)
-
-1. Vendor signs up at `/onboard`.
-2. In the platform's Meta App, add the vendor's WhatsApp Business phone number (**WhatsApp → API
-   Setup → Add phone number**) to get their `phone_number_id` and an access token (use a permanent
-   System User token for production, not the 24h temporary one).
-3. Vendor (or you, on their behalf) enters that phone_number_id + token in
-   `/admin/<slug>/settings`.
-4. Vendor creates their own Paystack account, grabs their **Secret Key** from
-   **Settings → API Keys & Webhooks**, and enters it in `/admin/<slug>/settings`.
-5. In that same Paystack dashboard page, vendor sets their **Webhook URL** to the one shown on
-   their Settings page (`https://<your-deployment>/api/webhook/paystack/<slug>`).
-
-That's the entire onboarding flow — genuinely no engineering work per new vendor.
+1. Vendor messages the platform number and registers (business name, currency).
+2. You get notified automatically with the exact `link` command to send once you've added their
+   number to the Meta App (**WhatsApp → API Setup → Add phone number**).
+3. Send that command from your own phone to the platform number. Done — the vendor is live.
+4. Vendor sets their own Paystack key from their admin **Settings** menu, and points their
+   Paystack account's webhook at the URL shown there.
 
 ## Local development
-
-Everything below has been run and verified end-to-end tonight (see "What's been verified"), using
-a local Docker Postgres and mock WhatsApp/Paystack servers in place of real accounts.
 
 ```bash
 npm install
 
-# Postgres via Docker (already running as `shawarma-postgres` on port 5433 if you're
-# picking this up on the same machine — check with `docker ps`; if it's not running:)
 docker run -d --name shawarma-postgres -e POSTGRES_PASSWORD=shawarma \
   -e POSTGRES_DB=shawarma_bot -p 5433:5432 postgres:16-alpine
 
-cp .env.example .env.local   # already done — DATABASE_URL points at the container above
-npm run db:generate          # generate SQL migrations from the schema (only after schema changes)
-npm run db:migrate           # apply them
-npm run db:seed              # create the demo-shawarma vendor + starter menu/FAQs
+cp .env.example .env.local
+npm run db:generate
+npm run db:migrate
+npm run db:seed     # creates the demo-shawarma vendor + starter menu/FAQs
 npm run dev
 ```
 
-Visit `http://localhost:3000/onboard` to create a new vendor, or
-`http://localhost:3000/admin/demo-shawarma/login` (password `demo1234`) for the seeded demo.
+### Testing without real WhatsApp/Paystack accounts
 
-### Testing without real accounts
-
-Two mock servers stand in for Meta/Paystack so the full conversation + payment flow can be
-exercised without real credentials:
+Two mock servers stand in for Meta/Paystack, verified against a real local Postgres:
 
 ```bash
-npm run mock:whatsapp   # logs every outbound WhatsApp message to the console, port 4001
+npm run mock:whatsapp   # logs every outbound WhatsApp message, port 4001
 npm run mock:paystack   # fakes /transaction/initialize and /transaction/verify, port 4002
 ```
 
-Then uncomment `WHATSAPP_GRAPH_BASE_URL` and `PAYSTACK_BASE_URL` in `.env.local` (they redirect
-outbound API calls to the mocks instead of the real APIs) and restart `npm run dev`.
-
-Simulate an inbound WhatsApp message (signed exactly like Meta signs real webhooks):
+Uncomment `WHATSAPP_GRAPH_BASE_URL`/`PAYSTACK_BASE_URL` in `.env.local`, restart `npm run dev`,
+then drive the whole system with the included simulator — it signs requests exactly like Meta does:
 
 ```bash
-WHATSAPP_APP_SECRET=demo_app_secret_not_real \
-  ./scripts/simulate-whatsapp-message.sh 000000000000demo 2348011111111 "hi"
+export WHATSAPP_APP_SECRET=demo_app_secret_not_real
+
+# Register a new vendor from scratch, purely over WhatsApp:
+./scripts/simulate-whatsapp-message.sh 000000000000platform 2348055555555 "hi"
+./scripts/simulate-whatsapp-message.sh 000000000000platform 2348055555555 "My Business Name"
+./scripts/simulate-whatsapp-message.sh 000000000000platform 2348055555555 "curr_NGN"
+
+# As the operator, list vendors and link the new one (use real values from Meta in production):
+./scripts/simulate-whatsapp-message.sh 000000000000platform 2348099999999 "vendors"
+./scripts/simulate-whatsapp-message.sh 000000000000platform 2348099999999 "link my-business-name 111111111111demo demo-token"
+
+# As the vendor's own admin phone, message their now-live number:
+./scripts/simulate-whatsapp-message.sh 111111111111demo 2348055555555 "menu"
+
+# As a customer, message the same number:
+./scripts/simulate-whatsapp-message.sh 111111111111demo 2348066666666 "hi"
 ```
 
-First argument is the vendor's `phone_number_id` (`000000000000demo` for the seeded demo vendor —
-this is what routes the message to the right vendor), second is the fake customer's number, third
-is what they typed (or an interactive reply id like `order`, `cat_shawarma`, `item_1`, `qty_2`,
-`checkout`). Run it repeatedly with different text to walk through the whole ordering flow.
+First argument is always the `phone_number_id` being messaged (this is what routes to the right
+vendor, or to the platform flow); second is the sender's phone; third is what they typed or an
+interactive reply id (`order`, `cat_shawarma`, `item_1`, `qty_2`, `checkout`, `menu_items`,
+`add_item`, `orders`, `faqs`, `settings`, etc. — see `src/lib/bot/admin-flow.ts` and
+`state-machine.ts` for the full id vocabulary). Give each call a distinct `[message_id]` 4th
+argument if you're scripting a fast sequence — message IDs are deduplicated exactly like Meta's
+real at-least-once delivery, so reusing one gets silently ignored.
 
-Simulate a Paystack payment confirmation:
+For the demo vendor (seeded by `npm run db:seed`): `phone_number_id` is `000000000000demo`,
+`adminPhone` is `VENDOR_PHONE_NUMBER` from `.env.local` (defaults to `2348000000001`).
 
-```bash
-REF="<the order_... reference from the checkout message the bot sent>"
-BODY="{\"event\":\"charge.success\",\"data\":{\"reference\":\"$REF\",\"amount\":500000,\"status\":\"success\"}}"
-SIG=$(echo -n "$BODY" | openssl dgst -sha512 -hmac "<vendor's paystackSecretKey>" | awk '{print $2}')
-curl -X POST http://localhost:3000/api/webhook/paystack/<vendor-slug> \
-  -H "Content-Type: application/json" -H "x-paystack-signature: $SIG" -d "$BODY"
-```
+### What's been verified (against a real local Postgres + mocks, not just typechecked)
 
-### What's been verified tonight (against real local Postgres + mock APIs, not just typechecked)
+- **Full vendor lifecycle purely over WhatsApp**: registration (business name → currency →
+  account created) → operator notified automatically with the exact link command → operator links
+  it → vendor notified from their own new number → vendor sets their Paystack key via chat → adds
+  a menu item via a guided chat flow → adds an FAQ via chat.
+- **Full order lifecycle** through that same freshly-registered vendor: a different phone orders
+  the item the admin just added, checks out, pays (simulated Paystack webhook), vendor advances
+  paid → preparing → ready from their own chat, customer gets the right message at every step.
+- **Admin identity isolation**: the demo vendor's admin phone messaging a *different* vendor's
+  number gets the ordinary customer flow, not admin access — confirmed directly, not assumed.
+- Re-registering before being linked returns a status message instead of restarting the wizard.
+- WhatsApp webhook signature rejection, GET verify handshake, and message-id deduplication.
+- A concurrency caveat found and consciously left as-is (see Known limitations) rather than a
+  logic bug — see the note below.
 
-- Full order lifecycle: menu browsing → cart → checkout → Paystack init → payment webhook → paid →
-  preparing → ready, with the correct WhatsApp message sent to the customer at every step and to
-  the vendor on new paid orders.
-- Cart math (multi-quantity totals) and prep-time ETA (longest item in the cart, not the sum) are
-  correct.
-- FAQ keyword matching.
-- Order tracking ("track my order").
-- Cancel-order flow, both pre- and mid-cart.
-- **Multi-tenant isolation**: two independently onboarded vendors, each with their own
-  `phone_number_id`, route correctly and never see each other's menu, orders, or conversation
-  state. Vendor A's login session gets a 401 against vendor B's admin API and vice versa.
-- WhatsApp webhook: signature rejection on a bad signature, GET verify handshake (correct token
-  accepted, wrong token rejected), and message-id deduplication (Meta's at-least-once retries
-  don't double-process an order).
-- Admin auth: login, wrong password rejected, password change, and old sessions correctly
-  continuing to work after a password change (a known tradeoff of stateless sessions — see
-  Known limitations).
-- Self-service vendor signup end-to-end, including automatic slug collision handling.
-
-**Not verified — needs your real accounts**: an actual WhatsApp message delivered to a real phone,
-and an actual Paystack charge run through Paystack's real servers. The mock servers prove the
-integration code is correct (right endpoints, right payload shapes, right signature schemes) but
-can't prove Meta's or Paystack's production systems behave identically to the mocks.
+**Not verified — needs real accounts**: an actual message delivered to a real phone, and an actual
+Paystack charge processed by Paystack's real servers. The mocks prove the integration code is
+correct (right endpoints, right payload shapes, right signature schemes) but can't prove Meta's or
+Paystack's production systems behave identically.
 
 ## Deploying
 
@@ -196,57 +177,57 @@ can't prove Meta's or Paystack's production systems behave identically to the mo
 vercel deploy
 ```
 
-Set all the env vars from `.env.example` in the Vercel project settings, then run the DB migration
-against the production database (`DATABASE_URL` pointed at prod, `npm run db:migrate`). Do **not**
-set `WHATSAPP_GRAPH_BASE_URL` or `PAYSTACK_BASE_URL` in production — those exist purely for local
-mock testing.
+Set every var from `.env.example` in the Vercel project settings, then run the DB migration
+against production (`DATABASE_URL` pointed at prod, `npm run db:migrate`). Do **not** set
+`WHATSAPP_GRAPH_BASE_URL` or `PAYSTACK_BASE_URL` in production — those exist purely for local mock
+testing.
 
 ## Project structure
 
 ```
 src/
   app/
-    api/webhook/whatsapp/route.ts               Shared WhatsApp webhook (verify + receive, routes by phone_number_id)
-    api/webhook/paystack/[vendorSlug]/route.ts  Per-vendor Paystack webhook
-    api/vendors/route.ts                        Public vendor signup
-    api/admin/[vendorSlug]/
-      login/route.ts, logout/route.ts           Session cookie auth
-      orders/, menu/, faqs/, settings/          Vendor-scoped CRUD (all session-guarded)
-    admin/[vendorSlug]/
-      login/page.tsx                            Login form (outside the auth-gated layout)
-      (protected)/layout.tsx                    Redirects to login if session invalid
-      (protected)/page.tsx, menu/, faqs/, settings/   Dashboard pages
-    onboard/page.tsx                            Vendor self-signup
+    api/webhook/whatsapp/route.ts               Shared webhook — routes by phone_number_id to
+                                                  either the platform flow or a vendor's flow
+    api/webhook/paystack/[vendorSlug]/route.ts   Per-vendor Paystack webhook
+    page.tsx                                     Static placeholder — not a functional UI
   lib/
-    db/schema.ts                     Drizzle schema — vendors + everything scoped by vendor_id
-    vendor/vendor.ts                 Vendor lookup/creation, password hashing
-    auth/session.ts                  Signed session token (HMAC, stateless)
-    auth/require-vendor.ts           Guards vendor-scoped API routes
-    whatsapp/client.ts               Send text/list/button messages (takes creds as a param)
-    whatsapp/webhook-handler.ts      Parse + verify inbound webhook payloads, extract phone_number_id
-    paystack/client.ts               Initialize/verify transactions (takes vendor's key as a param)
-    bot/state-machine.ts             Core conversation logic (vendor passed through every call)
+    db/schema.ts              vendors (adminPhone-based identity) + everything vendor-scoped
+    vendor/vendor.ts          Vendor lookup/creation, WhatsApp linking, settings updates
+    bot/conversation.ts       Shared conversation-state helpers (used by both flows below)
+    bot/state-machine.ts      Customer ordering flow; routes to admin-flow.ts by adminPhone match
+    bot/admin-flow.ts         Vendor admin flow: orders, menu, FAQs, settings — all via chat
+    bot/platform.ts           Vendor registration + operator "link"/"vendors" commands
     bot/menu-flow.ts, faq.ts, messages.ts, notify.ts
+    whatsapp/client.ts        Send text/list/button messages (creds passed per-call)
+    whatsapp/webhook-handler.ts   Parse + verify inbound payloads, extract phone_number_id
+    paystack/client.ts        Initialize/verify transactions (vendor's own key passed per-call)
 scripts/
-  simulate-whatsapp-message.sh       Sends a correctly-signed fake webhook message
-  mocks/mock-whatsapp-graph.js       Fake Graph API — logs outbound messages
-  mocks/mock-paystack.js             Fake Paystack — fakes initialize/verify
-seed/menu-seed.ts                    Creates the demo-shawarma vendor + starter menu/FAQs
+  simulate-whatsapp-message.sh    Sends a correctly-signed fake webhook message
+  mocks/mock-whatsapp-graph.js    Fake Graph API — logs outbound messages
+  mocks/mock-paystack.js          Fake Paystack — fakes initialize/verify
+seed/menu-seed.ts             Creates the demo-shawarma vendor + starter menu/FAQs
 ```
 
 ## Known limitations / not built yet
 
+- **Concurrency**: two messages from the same phone number arriving within milliseconds of each
+  other (not realistic human typing speed, but theoretically possible) can race on
+  `conversation_state` — the second read can see stale state from before the first write commits.
+  Not fixed tonight because a correct fix (row-level locking via a Postgres transaction held for
+  the duration of message handling, including the external Paystack/WhatsApp API calls in between)
+  is a real architectural change worth doing carefully, not patching at 2am. Real WhatsApp usage —
+  a human typing one message, waiting, typing the next — essentially never hits this window.
 - **Pickup only** — no delivery address flow.
 - **No multi-language support.**
-- **FAQ is keyword-matched, not a full NLU/LLM.** Swap `src/lib/bot/faq.ts` for an LLM-backed
-  fallback if questions get more varied.
+- **FAQ is keyword-matched, not a full NLU/LLM.**
 - **No discount codes / loyalty program.**
-- **Sessions aren't invalidated on password change** — a stateless signed cookie stays valid until
-  it expires (30 days) even after the password is changed. Fine for a solo-vendor admin login;
-  would want a token-versioning column on `vendors` if that matters more.
-- **No platform-operator dashboard** — no built-in way to see all vendors at a glance or
-  deactivate one; that's currently a direct database operation.
-- WhatsApp free-form (non-template) messages only work within the 24-hour customer service
-  window. Every notification here follows a customer-initiated order, so this holds in practice —
-  but proactive outreach (e.g. "we're back open!") outside that window needs a Meta-approved
-  Message Template.
+- **A vendor's admin phone can't also be a test customer of its own bot** — the phone-is-the-
+  identity model means that number always gets the admin flow on that vendor's number. Use a
+  second phone/number to test the customer experience.
+- **No platform-operator overview beyond the `vendors` command** — no way to deactivate a vendor
+  without a direct database operation.
+- WhatsApp free-form (non-template) messages only work within the 24-hour customer-service window.
+  Every message here follows a customer- or vendor-initiated conversation, so this holds in
+  practice — but proactive outreach (e.g. "we're back open!") outside that window would need a
+  Meta-approved Message Template.

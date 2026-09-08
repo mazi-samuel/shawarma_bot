@@ -54,9 +54,10 @@ export async function notifyCustomerStatusChange(
   await sendText(credentials, row.customer.phoneNumber, copy[status]!);
 }
 
+/** Pings the vendor's own admin number — the same number that manages orders/menu/FAQs by chatting with the bot. */
 export async function notifyVendorNewOrder(vendor: Vendor, orderId: number): Promise<void> {
   const credentials = creds(vendor);
-  if (!vendor.vendorNotifyPhone || !credentials) return;
+  if (!credentials) return;
 
   const row = await getOrderWithCustomer(orderId);
   if (!row) return;
@@ -71,7 +72,7 @@ export async function notifyVendorNewOrder(vendor: Vendor, orderId: number): Pro
 
   await sendText(
     credentials,
-    vendor.vendorNotifyPhone,
-    `🔔 New paid order #${orderId} from ${row.customer.name ?? row.customer.phoneNumber}\n${lines}\nTotal: ${formatMoney(row.order.totalKobo, vendor.currency)}\nOpen the admin dashboard to update its status.`
+    vendor.adminPhone,
+    `🔔 New paid order #${orderId} from ${row.customer.name ?? row.customer.phoneNumber}\n${lines}\nTotal: ${formatMoney(row.order.totalKobo, vendor.currency)}\n\nType "menu" here to open your admin menu and update its status.`
   );
 }

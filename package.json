@@ -20,15 +20,12 @@
     "react-dom": "19.0.0",
     "drizzle-orm": "^0.38.3",
     "postgres": "^3.4.5",
-    "zod": "^3.24.1",
-    "dotenv": "^16.4.7",
-    "bcryptjs": "^2.4.3"
+    "dotenv": "^16.4.7"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
     "@types/react": "^19.0.7",
     "@types/react-dom": "^19.0.3",
-    "@types/bcryptjs": "^2.4.6",
     "typescript": "^5.7.3",
     "drizzle-kit": "^0.30.2",
     "tsx": "^4.19.2",

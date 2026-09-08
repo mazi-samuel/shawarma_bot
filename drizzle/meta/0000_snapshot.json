@@ -1,5 +1,5 @@
 {
-  "id": "b8880d89-42b6-45c6-a33a-59ca4be51a22",
+  "id": "b69d851c-6cbc-4612-9e75-76167b8d7c69",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -340,7 +340,7 @@
           "columnsTo": [
             "id"
           ],
-          "onDelete": "no action",
+          "onDelete": "cascade",
           "onUpdate": "no action"
         },
         "order_items_menu_item_id_menu_items_id_fk": {
@@ -461,6 +461,46 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.platform_state": {
+      "name": "platform_state",
+      "schema": "",
+      "columns": {
+        "phone_number": {
+          "name": "phone_number",
+          "type": "varchar(20)",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "step": {
+          "name": "step",
+          "type": "varchar(30)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'idle'"
+        },
+        "context": {
+          "name": "context",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.processed_messages": {
       "name": "processed_messages",
       "schema": "",
@@ -509,9 +549,9 @@
           "primaryKey": false,
           "notNull": true
         },
-        "admin_password_hash": {
-          "name": "admin_password_hash",
-          "type": "text",
+        "admin_phone": {
+          "name": "admin_phone",
+          "type": "varchar(20)",
           "primaryKey": false,
           "notNull": true
         },
@@ -544,12 +584,6 @@
         "paystack_secret_key": {
           "name": "paystack_secret_key",
           "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "vendor_notify_phone": {
-          "name": "vendor_notify_phone",
-          "type": "varchar(20)",
           "primaryKey": false,
           "notNull": false
         },
@@ -590,6 +624,13 @@
           "nullsNotDistinct": false,
           "columns": [
             "slug"
+          ]
+        },
+        "vendors_admin_phone_unique": {
+          "name": "vendors_admin_phone_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "admin_phone"
           ]
         },
         "vendors_whatsapp_phone_number_id_unique": {

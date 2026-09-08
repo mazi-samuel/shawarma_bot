@@ -37,6 +37,11 @@ export async function getItemsForCategory(vendorId: number, category: MenuCatego
     );
 }
 
+/** Admin listing — includes unavailable items too, unlike getAvailableCategories/getItemsForCategory. */
+export async function getAllMenuItems(vendorId: number) {
+  return db.select().from(menuItems).where(eq(menuItems.vendorId, vendorId)).orderBy(menuItems.category, menuItems.name);
+}
+
 export async function getMenuItemById(vendorId: number, id: number) {
   const rows = await db
     .select()
@@ -44,6 +49,34 @@ export async function getMenuItemById(vendorId: number, id: number) {
     .where(and(eq(menuItems.id, id), eq(menuItems.vendorId, vendorId)))
     .limit(1);
   return rows[0];
+}
+
+export async function createMenuItem(
+  vendorId: number,
+  input: { name: string; category: MenuCategory; priceKobo: number; prepMinutes: number }
+) {
+  const [created] = await db
+    .insert(menuItems)
+    .values({ vendorId, ...input })
+    .returning();
+  return created;
+}
+
+export async function setMenuItemAvailability(vendorId: number, id: number, isAvailable: boolean) {
+  const [updated] = await db
+    .update(menuItems)
+    .set({ isAvailable, updatedAt: new Date() })
+    .where(and(eq(menuItems.id, id), eq(menuItems.vendorId, vendorId)))
+    .returning();
+  return updated;
+}
+
+export async function deleteMenuItem(vendorId: number, id: number): Promise<boolean> {
+  const deleted = await db
+    .delete(menuItems)
+    .where(and(eq(menuItems.id, id), eq(menuItems.vendorId, vendorId)))
+    .returning();
+  return deleted.length > 0;
 }
 
 export function computeCartTotalKobo(cart: CartLine[]): number {

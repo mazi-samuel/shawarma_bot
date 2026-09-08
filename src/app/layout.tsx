@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Shawarma Bot",
-  description: "WhatsApp ordering bot admin",
+  description: "A WhatsApp ordering bot platform. There is no web app here.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

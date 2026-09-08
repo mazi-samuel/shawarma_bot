@@ -3,12 +3,15 @@ import { db } from "@/lib/db";
 import { processedMessages } from "@/lib/db/schema";
 import { verifySignature, parseIncomingBatches } from "@/lib/whatsapp/webhook-handler";
 import { handleIncomingMessage } from "@/lib/bot/state-machine";
+import { handlePlatformMessage } from "@/lib/bot/platform";
 import { getVendorByWhatsappPhoneNumberId } from "@/lib/vendor/vendor";
 
 // One shared Meta App serves every vendor on the platform — each vendor's
 // WhatsApp number is added as a phone number under this single app, so
 // there's one webhook URL and one verify token/app secret for everyone.
-// Routing to the right vendor happens per-message via phone_number_id.
+// Routing happens per-message via phone_number_id: messages to the
+// platform's own number go to the registration/linking flow, everything
+// else routes to the matching vendor's customer/admin flow.
 
 export async function GET(req: NextRequest) {
   const searchParams = req.nextUrl.searchParams;
@@ -41,8 +44,10 @@ export async function POST(req: NextRequest) {
   const batches = parseIncomingBatches(payload);
 
   for (const batch of batches) {
-    const vendor = await getVendorByWhatsappPhoneNumberId(batch.phoneNumberId);
-    if (!vendor || !vendor.isActive) {
+    const isPlatformNumber = batch.phoneNumberId === process.env.PLATFORM_PHONE_NUMBER_ID;
+    const vendor = isPlatformNumber ? null : await getVendorByWhatsappPhoneNumberId(batch.phoneNumberId);
+
+    if (!isPlatformNumber && (!vendor || !vendor.isActive)) {
       console.warn("No active vendor for phone_number_id", batch.phoneNumberId);
       continue;
     }
@@ -58,7 +63,11 @@ export async function POST(req: NextRequest) {
           .returning();
         if (inserted.length === 0) continue;
 
-        await handleIncomingMessage(vendor, msg);
+        if (isPlatformNumber) {
+          await handlePlatformMessage(msg);
+        } else {
+          await handleIncomingMessage(vendor!, msg);
+        }
       } catch (err) {
         console.error("Failed to process WhatsApp message", msg.messageId, err);
       }

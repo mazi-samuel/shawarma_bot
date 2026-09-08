@@ -1,20 +1,16 @@
-import Link from "next/link";
-
 export default function Home() {
   return (
-    <main style={{ padding: 40, maxWidth: 640, margin: "0 auto" }}>
+    <main style={{ padding: 40, maxWidth: 560, fontFamily: "sans-serif" }}>
       <h1>🌯 Shawarma Bot</h1>
-      <p className="muted">
-        A WhatsApp ordering bot platform for shawarma &amp; pastry vendors — menu browsing,
-        payments, prep-time ETAs, order status notifications, and FAQs, all inside WhatsApp.
-        Customers interact with it entirely through WhatsApp; this site is for vendors.
-      </p>
       <p>
-        <Link href="/onboard">Set up a new vendor →</Link>
+        This is a WhatsApp ordering bot platform. There is no dashboard or sign-up form here —
+        everything, for both customers and vendors, happens inside WhatsApp:
       </p>
-      <p className="muted">
-        Already have a bot? Your dashboard is at <code>/admin/&lt;your-slug&gt;</code>.
-      </p>
+      <ul>
+        <li>Customers order, pay, and get status updates by messaging a vendor&apos;s WhatsApp number.</li>
+        <li>Vendors register, manage their menu/FAQs, and update order status by messaging too.</li>
+      </ul>
+      <p>This page exists only because a web server has to answer requests to &quot;/&quot;.</p>
     </main>
   );
 }
